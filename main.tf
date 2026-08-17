@@ -1,43 +1,103 @@
-provider "aws" {
-  region = "us-west-2"
+provider "azurerm" {
+  features {}
 }
 
-data "aws_availability_zones" "available" {
-  state = "available"
+resource "azurerm_resource_group" "main" {
+  name     = "rg-learn-hcp-terraform"
+  location = var.location
 }
 
-data "aws_ami" "ubuntu" {
-  most_recent = true
+resource "azurerm_virtual_network" "main" {
+  name                = "vnet-learn-hcp-terraform"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
 
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+  address_space = ["10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "main" {
+  name                 = "subnet-app"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+
+  address_prefixes = ["10.0.1.0/24"]
+}
+
+resource "azurerm_network_security_group" "main" {
+  name                = "nsg-learn-hcp-terraform"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+
+  security_rule {
+    name                       = "allow-ssh"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "main" {
+  subnet_id                 = azurerm_subnet.main.id
+  network_security_group_id = azurerm_network_security_group.main.id
+}
+
+resource "azurerm_public_ip" "main" {
+  name                = "pip-learn-hcp-terraform"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+
+  allocation_method = "Static"
+  sku               = "Standard"
+}
+
+resource "azurerm_network_interface" "main" {
+  name                = "nic-learn-hcp-terraform"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.main.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.main.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "app_server" {
+  name                = var.instance_name
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  size                = var.instance_type
+
+  admin_username = var.admin_username
+
+  network_interface_ids = [
+    azurerm_network_interface.main.id
+  ]
+
+  disable_password_authentication = true
+
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = var.ssh_public_key
   }
 
-  owners = ["099720109477"] # Canonical
-}
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
 
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "5.19.0"
-
-  name = "learn-hcp-terraform"
-  cidr = "10.0.0.0/16"
-
-  azs             = data.aws_availability_zones.available.names
-  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
-  public_subnets  = ["10.0.101.0/24"]
-
-  enable_dns_hostnames = true
-}
-
-
-resource "aws_instance" "app_server" {
-  ami           = data.aws_ami.ubuntu.id
-  instance_type = var.instance_type
-
-  vpc_security_group_ids = [module.vpc.default_security_group_id]
-  subnet_id              = module.vpc.private_subnets[0]
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "ubuntu-24_04-lts"
+    sku       = "server"
+    version   = "latest"
+  }
 
   tags = {
     Name = var.instance_name
