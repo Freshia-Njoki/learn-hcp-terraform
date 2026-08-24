@@ -1,7 +1,3 @@
-provider "azurerm" {
-  features {}
-}
-
 # Reference the existing resource group
 data "azurerm_resource_group" "main" {
   name = "rg-learn-terraform"
